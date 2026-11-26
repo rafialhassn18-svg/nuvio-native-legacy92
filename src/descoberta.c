@@ -9809,6 +9809,34 @@ static int sobIndiceDoTipo(const char *id) {
   return sobTipo[0] ? cat_indice_por_imdb_tipo(id, sobTipo) : cat_indice_por_imdb(id);
 }
 
+// ID PROPRIO DE UM ADDON (ex.: "tmdb:99033172" de um catalogo que nao esta no
+// IMDb). Nem o TMDB, nem o catalogo do Nuvio, nem o Cinemeta conhecem esse id:
+// quem o conhece e o addon que o publicou, via /meta/<tipo>/<id>.json. Antes o
+// caminho sob demanda (Ver tudo, Vitrine, Continuar assistindo, Explorar) so
+// perguntava a esses tres e terminava em "indice -1", entao o detalhe nunca
+// abria; so a fileira da home abria, porque o item ja vinha no catalogo.
+// Pergunta, em ordem, a cada addon ativo com o recurso "meta" (metaDoAddonT ja
+// guarda cache e falha lembrada). O tipo que o meta traz tem de ser o pedido.
+static int tituloDoAddon(const char *tipo, const char *id) {
+  int i, n = addons_n();
+  for (i = 0; i < n; i++) {
+    char *corpo = metaDoAddonT(i, tipo, id, 10);
+    const char *m;
+    CatItem it;
+    int j = -1;
+    if (!corpo) continue;
+    m = metaprov_meta_valido(corpo) ? strstr(corpo, "\"meta\"") : NULL;
+    if (m && deMeta(m, NULL, tipo, &it) && !strcmp(it.tipo, tipo) &&
+        (!it.imdb[0] || !strcmp(it.imdb, id))) {
+      if (!it.imdb[0]) snprintf(it.imdb, sizeof it.imdb, "%s", id);
+      j = descCatAcrescentar(&it);
+    }
+    free(corpo);
+    if (j >= 0) return j;
+  }
+  return -1;
+}
+
 static void *buscarTitulo(void *arg) {
   char url[200], id[24], *corpo;
   int achou = -1, passo;
@@ -9854,6 +9882,20 @@ static void *buscarTitulo(void *arg) {
   const char *tiposPedido[2];
   int nTipos = sobTipo[0] ? 1 : desc_meta_tipos("", tiposPedido);
   if (sobTipo[0]) tiposPedido[0] = sobTipo;
+  // Id que nao e do IMDb: os addons do dono vem ANTES do Nuvio/Cinemeta. Um 404
+  // do Nuvio num "tmdb:" que ele nao conhece pausa o provedor por um minuto
+  // (metaprov.c), entao nao vale perguntar a ele primeiro por um id de addon.
+  if (!idbase_e_imdb(id)) {
+    int pa, ja = -1;
+    for (pa = 0; pa < nTipos && ja < 0; pa++) ja = tituloDoAddon(tiposPedido[pa], id);
+    if (ja >= 0) {
+      printf("[desc] sob demanda %s -> addon do dono, indice %d\n", id, ja);
+      fflush(stdout);
+      sobIndice = ja;
+      sobFioVivo = 0;
+      return NULL;
+    }
+  }
   for (passo = 0; passo < nTipos && achou < 0; passo++) {
     const char *tipo = tiposPedido[passo];
     int ultimo = passo == nTipos - 1;
@@ -9904,12 +9946,16 @@ void desc_pedir_titulo(const char *imdb) {
   const char *dp;
   if (!imdb || imdb[0] != 't' || sobFioVivo) return;
   // Corta o sufixo de episodio, se vier: o meta e do TITULO.
+  // "tmdb:<n>[:S:E]": o numero faz parte do id do titulo (antes o corte no
+  // primeiro ':' deixava so "tmdb" e o pedido morria em "indice -1").
   dp = strchr(imdb, ':');
+  if (dp && !strncmp(imdb, "tmdb:", 5)) dp = strchr(imdb + 5, ':');
   if (dp) { size_t k = (size_t)(dp - imdb);
             if (k >= sizeof id) k = sizeof id - 1;
             memcpy(id, imdb, k); id[k] = 0; }
   else snprintf(id, sizeof id, "%s", imdb);
-  snprintf(sobTipo, sizeof sobTipo, "%s", sobIdTemEpisodio(imdb) ? "series" : "");
+  snprintf(sobTipo, sizeof sobTipo, "%s",
+           sobIdTemEpisodio(!strncmp(imdb, "tmdb:", 5) ? imdb + 5 : imdb) ? "series" : "");
   if (sobIndiceDoTipo(id) >= 0) return;   // ja temos no tipo pedido
   sobTemSemente = 0;
   snprintf(sobId, sizeof sobId, "%s", id);
