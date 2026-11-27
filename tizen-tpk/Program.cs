@@ -1006,7 +1006,7 @@ namespace NuvioTpk
         // ponytail: one bounded retry; real Home presses after interaction or
         // startup must stay paused. TV validation is needed for this heuristic.
         bool RecuperaPausaInicial() => !jaPausou && !primeiraTecla && !saindo &&
-            !fim && !erroNaTela && trocados < 3 && relogio.ElapsedMilliseconds < 8000;
+            !fim && !erroNaTela && trocados < 60 && relogio.ElapsedMilliseconds < 25000;
 
         protected override void OnPause()
         {
@@ -1027,13 +1027,29 @@ namespace NuvioTpk
                 var t = new NuiTimer(100);
                 t.Tick += (s, e) => {
                     if (saindo || soltou || fim || erroNaTela || primeiraTecla ||
-                        !pausado || relogio.ElapsedMilliseconds >= 8000) return false;
+                        !pausado || relogio.ElapsedMilliseconds >= 25000) return false;
                     if (principalVisivel || (!JanelaUnica && glVisivel)) return true;
                     Etapa("note recovering startup pause" + Contagem());
                     try { NuiWindow.Instance.Show(); NuiWindow.Instance.Raise(); }
                     catch (Exception x) { Etapa("note startup raise failed " + x.GetType().Name + ": " + x.Message); }
                     SobeGl("startup pause");
                     OnResume();
+                    // AUTO-REABRIR: se mesmo assim o app ficar pausado, manda o
+                    // mesmo pedido que o botao do menu da TV manda (2o clique).
+                    var t2 = new NuiTimer(1500);
+                    t2.Tick += (s2, e2) => {
+                        if (!pausado || saindo || soltou || fim || primeiraTecla) return false;
+                        try
+                        {
+                            Etapa("note auto-relaunch after startup pause");
+                            Tizen.Applications.AppControl.SendLaunchRequest(new Tizen.Applications.AppControl {
+                                ApplicationId = Tizen.Applications.Application.Current.ApplicationInfo.ApplicationId,
+                                Operation = Tizen.Applications.AppControlOperations.Default });
+                        }
+                        catch (Exception x) { Etapa("note auto-relaunch failed " + x.GetType().Name + ": " + x.Message); }
+                        return false;
+                    };
+                    t2.Start();
                     return false;
                 };
                 t.Start();
@@ -1053,9 +1069,29 @@ namespace NuvioTpk
             base.OnResume();
         }
 
+        // AUTO-REABRIR 2: se o sistema MATAR o app no arranque (antes de qualquer
+        // tecla, sem o usuario ter saido), pede a propria reabertura. Trava: so
+        // uma vez a cada 2 minutos (arquivo-marca), para nunca virar laco.
+        void ReabreSeMatouNoArranque()
+        {
+            try
+            {
+                if (saindo || primeiraTecla || relogio.ElapsedMilliseconds > 30000) return;
+                string marca = IOPath.Combine(DirectoryInfo.Data, "reabrir.marca");
+                if (File.Exists(marca) && (DateTime.UtcNow - File.GetLastWriteTimeUtc(marca)).TotalSeconds < 120) return;
+                File.WriteAllText(marca, "1");
+                Etapa("note auto-relaunch after startup kill");
+                Tizen.Applications.AppControl.SendLaunchRequest(new Tizen.Applications.AppControl {
+                    ApplicationId = Tizen.Applications.Application.Current.ApplicationInfo.ApplicationId,
+                    Operation = Tizen.Applications.AppControlOperations.Default });
+            }
+            catch (Exception x) { Etapa("note auto-relaunch (kill) failed " + x.GetType().Name + ": " + x.Message); }
+        }
+
         protected override void OnTerminate()
         {
             Etapa("note terminate" + Contagem());
+            ReabreSeMatouNoArranque();
             if (JANELA_SAIDA_LIMPA) { SoltaTudo("terminate"); ArmaSaidaForcada("terminate"); }
             else video?.Parar();
             base.OnTerminate();
