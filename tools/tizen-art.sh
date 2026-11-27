@@ -47,6 +47,11 @@ for d in icones icones-app badges selos marcas prov editorial logo poster ep ele
 done
 # Public trust roots only; never copy arbitrary PEM or token files.
 cp "$ORIGEM/discord-ca.pem" "$DESTINO/discord-ca.pem"
+# AJUSTE LOCAL (fork pessoal): so a lista de addons publicos, sem chave.
+# Sem ela o app nao tem addon nenhum: a conta, que os traria, nao existe.
+cp "$ORIGEM/addons.txt" "$DESTINO/addons.txt" 2>/dev/null || true
+# Config do servidor da conta (url / anon key / login), lida por nuvem_configurar().
+cp "$ORIGEM/nuvem.txt" "$DESTINO/nuvem.txt" 2>/dev/null || true
 # Backdrops da home: os .jpg numerados na raiz.
 cp "$ORIGEM"/*.jpg "$DESTINO"/ 2>/dev/null || true
 [ "${NUVIO_ARTE_CINEMATIC:-0}" = "1" ] && [ -d "$ORIGEM/cinematic" ] && cp -R "$ORIGEM/cinematic" "$DESTINO/"
